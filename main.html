@@ -75,6 +75,47 @@ font-size: 14px;
 line-height: 1.5;
 }
 
+/* Touch controls (hidden on desktop) */
+.touch-controls {
+	display: none; /* shown on small screens */
+	position: absolute;
+	bottom: 12px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 92%;
+	max-width: 720px;
+	pointer-events: auto; /* override hud's none */
+	z-index: 4;
+	user-select: none;
+}
+.touch-controls .row {
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: 8px;
+}
+.touch-btn {
+	flex: 1 1 30%;
+	margin: 0 6px;
+	background: rgba(0,0,0,0.6);
+	color: white;
+	padding: 14px 8px;
+	border-radius: 8px;
+	font-weight: bold;
+	text-align: center;
+	font-size: 16px;
+	border: 1px solid #444;
+	touch-action: none;
+}
+
+/* responsive tweaks */
+@media (max-width: 700px) {
+	#controls-help { display: none; }
+	#minimap-container { top: auto; bottom: 140px; right: 12px; width: 120px; height: 120px; }
+	#speedometer { font-size: 18px; bottom: 12px; right: 12px; }
+	#score { font-size: 16px; bottom: 46px; right: 12px; }
+	.touch-controls { display: block; }
+}
+
 #speedometer {
 position: absolute;
 bottom: 20px;
@@ -130,6 +171,20 @@ font-weight: bold;
 
 <div id="speedometer">0 km/h</div>
 <div id="score">Score: 1000</div>
+</div>
+
+<!-- Touch controls for mobile -->
+<div class="touch-controls" id="touch-controls">
+	<div class="row">
+		<div class="touch-btn" id="tc-acc">▲<br>Gas</div>
+		<div class="touch-btn" id="tc-brake">▼<br>Brake</div>
+		<div class="touch-btn" id="tc-hand">●<br>Handbrake</div>
+	</div>
+	<div class="row">
+		<div class="touch-btn" id="tc-left">◀<br>Left</div>
+		<div style="width:12px"></div>
+		<div class="touch-btn" id="tc-right">▶<br>Right</div>
+	</div>
 </div>
 
 <script>
@@ -224,6 +279,8 @@ rickshaw.rotation.y = 0; // face forward along +Z by default
 
 // Inputs
 setupInputs();
+// Touch controls (for mobile)
+setupTouchControls();
 
 // Loop
 animate();
@@ -254,6 +311,36 @@ camera.aspect = window.innerWidth / window.innerHeight;
 camera.updateProjectionMatrix();
 renderer.setSize(window.innerWidth, window.innerHeight);
 });
+}
+
+function setupTouchControls() {
+	const map = {
+		acc: document.getElementById('tc-acc'),
+		brake: document.getElementById('tc-brake'),
+		left: document.getElementById('tc-left'),
+		right: document.getElementById('tc-right'),
+		hand: document.getElementById('tc-hand')
+	};
+
+	function bind(btn, downCb, upCb) {
+		if (!btn) return;
+		btn.addEventListener('touchstart', (e) => { e.preventDefault(); downCb(); }, { passive: false });
+		btn.addEventListener('mousedown', (e) => { e.preventDefault(); downCb(); });
+		const end = (e) => { e.preventDefault(); upCb(); };
+		btn.addEventListener('touchend', end, { passive: false });
+		btn.addEventListener('touchcancel', end, { passive: false });
+		btn.addEventListener('mouseup', end);
+		btn.addEventListener('mouseleave', end);
+	}
+
+	bind(map.acc, () => { keys.w = true; }, () => { keys.w = false; });
+	bind(map.brake, () => { keys.s = true; }, () => { keys.s = false; });
+	bind(map.left, () => { keys.a = true; }, () => { keys.a = false; });
+	bind(map.right, () => { keys.d = true; }, () => { keys.d = false; });
+	bind(map.hand, () => { keys.space = true; }, () => { keys.space = false; });
+
+	// Prevent touch gestures from scrolling the page while playing
+	window.addEventListener('touchmove', function(e){ if (document.getElementById('touch-controls').contains(e.target)) e.preventDefault(); }, { passive: false });
 }
 
 // --- GAMEPLAY LOGIC ---
@@ -308,6 +395,18 @@ camera.lookAt(rickshaw.position.x, rickshaw.position.y + 2, rickshaw.position.z)
 	camera.fov += (cameraTargetFov - camera.fov) * 0.08;
 	camera.updateProjectionMatrix();
 }
+
+// Adjust camera FOV for small screens for better visibility
+function adjustFovForScreen() {
+	if (window.innerWidth <= 700) {
+		camera.fov = Math.max(camera.fov, DEFAULT_FOV + 8);
+		cameraTargetFov = Math.max(cameraTargetFov, DEFAULT_FOV + 8);
+		camera.updateProjectionMatrix();
+	}
+}
+
+window.addEventListener('resize', adjustFovForScreen);
+window.addEventListener('load', adjustFovForScreen);
 
 function updateEnvironment() {
 // Only update environment if player moved significantly

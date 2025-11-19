@@ -35,6 +35,44 @@ pointer-events: none;
 #ref-panel img { width: 100%; height: auto; display: block; border-radius: 4px; border: 2px solid #fff; }
 #ref-panel .caption { margin-top: 8px; font-size: 13px; text-align: center; }
 #ref-panel a { color: #ffd; text-decoration: underline; font-size: 12px; }
+
+#ref-panel .close-btn {
+	position: absolute;
+	top: 6px;
+	right: 8px;
+	background: rgba(0,0,0,0.6);
+	color: #fff;
+	border: none;
+	width: 28px;
+	height: 28px;
+	border-radius: 14px;
+	font-weight: bold;
+	cursor: pointer;
+}
+
+#ref-panel .cross-toggle {
+	margin-top: 8px;
+	display: block;
+	width: 100%;
+	text-align: center;
+	background: rgba(255,255,255,0.06);
+	color: #fff;
+	padding: 6px 8px;
+	border-radius: 6px;
+	cursor: pointer;
+	border: 1px solid rgba(255,255,255,0.08);
+}
+
+#ref-panel .cross-overlay {
+	pointer-events: none;
+	position: absolute;
+	left: 8px;
+	right: 8px;
+	top: 8px;
+	bottom: 36px;
+	display: none;
+}
+#ref-panel .cross-overlay svg { width: 100%; height: 100%; }
 </style>
 <!-- Import Three.js from CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -44,12 +82,45 @@ pointer-events: none;
 <body>
 <div id="info">Birtamode Monument - Drag to Rotate, Scroll to Zoom</div>
 <div id="ref-panel">
+	<button class="close-btn" id="ref-close" title="Hide reference">×</button>
 	<a href="https://upload.wikimedia.org/wikipedia/commons/c/c8/Birtamode_city_of_jhapa_district4.JPG" target="_blank" rel="noopener noreferrer">
-		<img src="https://upload.wikimedia.org/wikipedia/commons/c/c8/Birtamode_city_of_jhapa_district4.JPG" alt="Birtamode Monument reference" />
+		<img id="ref-img" src="https://upload.wikimedia.org/wikipedia/commons/c/c8/Birtamode_city_of_jhapa_district4.JPG" alt="Birtamode Monument reference" />
 	</a>
+	<div class="cross-overlay" id="ref-cross-overlay" aria-hidden="true">
+		<svg viewBox="0 0 100 100" preserveAspectRatio="none">
+			<line x1="0" y1="0" x2="100" y2="100" stroke="#ff2222" stroke-width="6" stroke-linecap="round" />
+			<line x1="100" y1="0" x2="0" y2="100" stroke="#ff2222" stroke-width="6" stroke-linecap="round" />
+		</svg>
+	</div>
 	<div class="caption">Reference: Birtamode Monument (Muktichowk). Click image to open full size.</div>
+	<button class="cross-toggle" id="ref-cross-toggle">Cross Out</button>
 </div>
 <script>
+// Reference panel controls
+function hideRefPanel() {
+	const p = document.getElementById('ref-panel');
+	if (p) p.style.display = 'none';
+}
+
+function toggleRefCross() {
+	const overlay = document.getElementById('ref-cross-overlay');
+	const btn = document.getElementById('ref-cross-toggle');
+	if (!overlay || !btn) return;
+	if (overlay.style.display === 'block') {
+		overlay.style.display = 'none';
+		btn.innerText = 'Cross Out';
+	} else {
+		overlay.style.display = 'block';
+		btn.innerText = 'Un-cross';
+	}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+	const close = document.getElementById('ref-close');
+	const toggle = document.getElementById('ref-cross-toggle');
+	if (close) close.addEventListener('click', hideRefPanel);
+	if (toggle) toggle.addEventListener('click', toggleRefCross);
+});
 // --- SCENE SETUP ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87CEEB); // Sky blue
