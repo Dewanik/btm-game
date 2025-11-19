@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Birtamode Infinite Drive</title>
+<style>
+body { margin: 0; overflow: hidden; background-color: #87CEEB; font-family: monospace; }
+canvas { display: block; }
+
+/* HUD */
+#hud {
+position: absolute;
+top: 0;
+left: 0;
+width: 100%;
+height: 100%;
+pointer-events: none;
+}
+
+#minimap-container {
+position: absolute;
+top: 20px;
+right: 20px;
+width: 150px;
+height: 150px;
+background: rgba(0, 0, 0, 0.5);
+border: 2px solid white;
+border-radius: 50%;
+overflow: hidden;
+}
+
+#minimap-content {
+position: relative;
+width: 100%;
+height: 100%;
+transform-origin: center;
+}
+
+.map-marker {
+position: absolute;
+width: 10px;
+height: 10px;
+border-radius: 50%;
+transform: translate(-50%, -50%);
+}
+
+#player-marker {
+background: lime;
+z-index: 2;
+top: 50%;
+left: 50%;
+width: 8px;
+height: 8px;
+border: 1px solid white;
+}
+
+#center-marker {
+background: yellow;
+width: 12px;
+height: 12px;
+border: 2px solid red;
+z-index: 1;
+}
+
+#controls-help {
+position: absolute;
+bottom: 20px;
+left: 20px;
+color: white;
+background: rgba(0,0,0,0.6);
+padding: 15px;
+border-radius: 10px;
+font-size: 14px;
+line-height: 1.5;
+}
+
+#speedometer {
+position: absolute;
+bottom: 20px;
+right: 20px;
+color: white;
+font-size: 24px;
+font-weight: bold;
+text-shadow: 2px 2px 0 #000;
+}
+
+#score {
+position: absolute;
+bottom: 60px;
+right: 20px;
+color: white;
+font-size: 18px;
+font-weight: bold;
+text-shadow: 2px 2px 0 #000;
+}
+
+.key {
+display: inline-block;
+background: #333;
+padding: 2px 6px;
+border-radius: 4px;
+border: 1px solid #555;
+margin: 0 2px;
+font-weight: bold;
+}
+
+</style>
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+<div id="hud">
+<div id="minimap-container">
+<div id="minimap-content">
+<div id="center-marker" class="map-marker"></div>
+<div id="player-marker" class="map-marker"></div>
+</div>
+</div>
+
+<div id="controls-help">
+<div style="margin-bottom:5px; color:#ccc">CONTROLS</div>
+<div><span class="key">W</span> <span class="key">↑</span> Accelerate</div>
+<div><span class="key">S</span> <span class="key">↓</span> Brake / Reverse</div>
+<div><span class="key">A</span> <span class="key">D</span> Turn</div>
+<div><span class="key">SPACE</span> Handbrake</div>
+<div style="margin-top:10px; color: yellow;">Goal: Explore & Find way back!</div>
+</div>
+
+<div id="speedometer">0 km/h</div>
+<div id="score">Score: 1000</div>
+</div>
+
+<script>
+// --- CONFIGURATION ---
+// Make roads 4-way: N, E, S, W
+const ROAD_ANGLES = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]; // 0, 90, 180, 270 degrees
+const ROAD_WIDTH = 12;
+const BUILDING_SPACING = 25; // Distance between buildings
+const BUILDING_OFFSET = 15; // Distance from road center
+const RENDER_DISTANCE = 300; // How far to generate buildings
+
+// --- VARIABLES ---
+let scene, camera, renderer;
+let rickshaw, monument;
+let buildingPool = []; // Array to reuse building meshes
+let roadLines = []; // Array for road visuals
+let pedestrianPool = [];
+let pedestrians = [];
+let crossings = [];
+
+let score = 1000;
+
+// Approximate collision radius for player
+const RICKSHAW_RADIUS = 1.2;
+
+// Camera FOV toggle
+const DEFAULT_FOV = 60;
+const WIDE_FOV = 90;
+let cameraTargetFov = DEFAULT_FOV;
+
+// Physics / Movement
+let speed = 0;
+let maxSpeed = 1.2;
+let acceleration = 0.02;
+let friction = 0.98;
+let turnSpeed = 0.04;
+let steeringAngle = 0;
+
+const keys = { w: false, a: false, s: false, d: false, space: false };
+
+// Minimap
+const mapScale = 0.5; // Pixels per world unit
+
+function init() {
+// Scene Setup
+scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+scene.fog = new THREE.Fog(0x87CEEB, 50, RENDER_DISTANCE - 50);
+
+camera = new THREE.PerspectiveCamera(DEFAULT_FOV, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// Lights
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+sun.position.set(50, 100, 50);
+sun.castShadow = true;
+sun.shadow.mapSize.width = 2048;
+sun.shadow.mapSize.height = 2048;
+sun.shadow.camera.near = 0.5;
+sun.shadow.camera.far = 500;
+sun.shadow.camera.left = -100;
+sun.shadow.camera.right = 100;
+sun.shadow.camera.top = 100;
+sun.shadow.camera.bottom = -100;
+scene.add(sun);
+
+// --- WORLD GENERATION ---
+createGround();
+createRoads();
+createCrossings();
+monument = createMonument();
+scene.add(monument);
+
+// Create Pool of Buildings (reuse these ~60 meshes to fake infinity)
+createBuildingPool(60);
+// Pedestrians
+createPedestrianPool(40);
+
+// Player
+rickshaw = createRickshaw();
+scene.add(rickshaw);
+// Ensure rickshaw starts a little away from the monument (not inside it)
+rickshaw.position.set(0, 0, -40);
+rickshaw.rotation.y = 0; // face forward along +Z by default
+
+// Inputs
+setupInputs();
+
+// Loop
+animate();
+}
+
+// --- INPUT HANDLING ---
+function setupInputs() {
+window.addEventListener('keydown', (e) => {
+if (e.key.toLowerCase() === 'w' || e.key === 'ArrowUp') keys.w = true;
+if (e.key.toLowerCase() === 's' || e.key === 'ArrowDown') keys.s = true;
+if (e.key.toLowerCase() === 'a' || e.key === 'ArrowLeft') keys.a = true;
+if (e.key.toLowerCase() === 'd' || e.key === 'ArrowRight') keys.d = true;
+if (e.code === 'Space') keys.space = true;
+		// Toggle wider camera view with 'V'
+		if (e.key.toLowerCase() === 'v') {
+			cameraTargetFov = (cameraTargetFov === DEFAULT_FOV) ? WIDE_FOV : DEFAULT_FOV;
+		}
+});
+window.addEventListener('keyup', (e) => {
+if (e.key.toLowerCase() === 'w' || e.key === 'ArrowUp') keys.w = false;
+if (e.key.toLowerCase() === 's' || e.key === 'ArrowDown') keys.s = false;
+if (e.key.toLowerCase() === 'a' || e.key === 'ArrowLeft') keys.a = false;
+if (e.key.toLowerCase() === 'd' || e.key === 'ArrowRight') keys.d = false;
+if (e.code === 'Space') keys.space = false;
+});
+window.addEventListener('resize', () => {
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth, window.innerHeight);
+});
+}
+
+// --- GAMEPLAY LOGIC ---
+function updatePhysics() {
+// Acceleration
+if (keys.w) speed += acceleration;
+if (keys.s) speed -= acceleration;
+
+// Friction
+speed *= friction;
+if (keys.space) speed *= 0.9; // Handbrake
+
+// Cap speed
+if (speed > maxSpeed) speed = maxSpeed;
+if (speed < -maxSpeed / 2) speed = -maxSpeed / 2;
+
+// Steering (only when moving)
+if (Math.abs(speed) > 0.01) {
+const turnPower = (keys.a ? 1 : 0) - (keys.d ? 1 : 0);
+// Reverse steering when going backward feels more natural
+const dir = speed > 0 ? 1 : -1;
+rickshaw.rotation.y += turnPower * turnSpeed * dir;
+
+// Visual leaning
+rickshaw.rotation.z = turnPower * 0.05 * (speed/maxSpeed);
+}
+
+// Move vehicle
+// record previous position in case of collision revert
+const prevPos = rickshaw.position.clone();
+rickshaw.translateZ(speed);
+// Check for collisions and revert if necessary
+checkCollisions(prevPos);
+
+// Update Speedometer UI
+document.getElementById('speedometer').innerText = Math.floor(Math.abs(speed) * 50) + " km/h";
+}
+
+function updateCamera() {
+// Camera Follow Logic
+// Calculate ideal position behind player
+const relativeOffset = new THREE.Vector3(0, 6, -12); // Up and Behind
+
+// Transform local offset to world space
+const cameraOffset = relativeOffset.applyMatrix4(rickshaw.matrixWorld);
+
+// Smoothly interpolate camera position
+camera.position.lerp(cameraOffset, 0.1);
+camera.lookAt(rickshaw.position.x, rickshaw.position.y + 2, rickshaw.position.z);
+
+	// Smoothly lerp camera FOV to target
+	camera.fov += (cameraTargetFov - camera.fov) * 0.08;
+	camera.updateProjectionMatrix();
+}
+
+function updateEnvironment() {
+// Only update environment if player moved significantly
+// For simplicity, we update every frame but optimized
+
+const px = rickshaw.position.x;
+const pz = rickshaw.position.z;
+
+// Check which road we are closest to
+let activeRoadAngle = -1;
+let minDist = 999999;
+let distAlongRoad = 0;
+
+ROAD_ANGLES.forEach(angle => {
+// Project player pos onto road vector
+const roadDir = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle));
+const playerVec = new THREE.Vector3(px, 0, pz);
+
+// Dot product gives distance along the road
+const d = playerVec.dot(roadDir);
+
+// Perpendicular distance
+const perpPoint = roadDir.clone().multiplyScalar(d);
+const perpDist = playerVec.distanceTo(perpPoint);
+
+// If we are "on" or "near" this road corridor (wide cone)
+// and moving away from center (d > 0)
+if (perpDist < 80 && d > -20) {
+activeRoadAngle = angle;
+distAlongRoad = d;
+}
+});
+
+// Hide all buildings by default (move under ground)
+// Then pop them up if they should be visible
+let buildingIndex = 0;
+
+// Recycle / place pedestrians near active road as well
+let pedIndex = 0;
+
+if (activeRoadAngle !== -1) {
+// We are on a road. Generate buildings around us.
+const roadDir = new THREE.Vector3(Math.sin(activeRoadAngle), 0, Math.cos(activeRoadAngle));
+const roadSide = new THREE.Vector3(Math.cos(activeRoadAngle), 0, -Math.sin(activeRoadAngle)); // Perpendicular
+
+// Determine grid start/end based on player view
+// "Snap" current dist to grid
+const startGrid = Math.floor((distAlongRoad - 50) / BUILDING_SPACING);
+const endGrid = Math.floor((distAlongRoad + RENDER_DISTANCE) / BUILDING_SPACING);
+
+for (let i = startGrid; i < endGrid; i++) {
+if (buildingIndex >= buildingPool.length) break;
+
+// Don't render buildings too close to monument (center safety zone)
+const d = i * BUILDING_SPACING;
+if (d < 30) continue;
+
+// Deterministic Random based on grid index (i) and road (activeRoadAngle)
+// This ensures the building looks the same if you drive back
+const seed = Math.abs(Math.sin(i * 12.9898 + activeRoadAngle * 78.233) * 43758.5453);
+
+// Left Side
+placeBuilding(buildingPool[buildingIndex++], roadDir, roadSide, d, -1, seed);
+
+if (buildingIndex >= buildingPool.length) break;
+
+// Right Side
+placeBuilding(buildingPool[buildingIndex++], roadDir, roadSide, d, 1, seed * 1.5);
+
+				// (Pedestrians now only spawn at zebra crossings)
+}
+}
+
+// Hide remaining unused buildings
+for (let i = buildingIndex; i < buildingPool.length; i++) {
+buildingPool[i].position.y = -50;
+}
+
+// Hide unused pedestrians
+for (let i = pedIndex; i < pedestrianPool.length; i++) {
+	const p = pedestrianPool[i];
+	if (p.userData.active) {
+		p.userData.active = false;
+		p.position.y = -50;
+	}
+}
+    
+	// Spawn pedestrians at crossings that are near the player's active road distance
+	if (activeRoadAngle !== -1) {
+		// distAlongRoad was computed earlier in this function
+		const roadDir2 = new THREE.Vector3(Math.sin(activeRoadAngle), 0, Math.cos(activeRoadAngle));
+		const playerVec2 = new THREE.Vector3(px, 0, pz);
+		const distAlong = playerVec2.dot(roadDir2);
+		for (let c = 0; c < crossings.length; c++) {
+			const crossing = crossings[c];
+			if (Math.abs(crossing.angle - activeRoadAngle) > 0.001) continue;
+			const cd = crossing.pos.dot(roadDir2);
+			if (cd > distAlong - 60 && cd < distAlong + RENDER_DISTANCE) {
+				spawnPedestriansAtCrossing(crossing);
+			}
+		}
+	}
+}
+
+function createCrossings() {
+	// Create zebra crossings along each road arm at regular intervals
+	const stripeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+	const stripeGeo = new THREE.BoxGeometry(0.6, 0.02, 2.0);
+
+	ROAD_ANGLES.forEach(angle => {
+		const roadDir = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle));
+		const roadSide = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
+
+		// Start a bit away from roundabout and place crossings every 100 units
+		for (let d = 60; d < 2000; d += BUILDING_SPACING * 4) {
+			const center = roadDir.clone().multiplyScalar(d);
+			// create visual stripes across the road (a few parallel boxes)
+			const crossGroup = new THREE.Group();
+			for (let s = -2; s <= 2; s++) {
+				const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+				// position across road: offset by s*0.8 along roadSide
+				const local = roadSide.clone().multiplyScalar(s * 0.8);
+				// stripe oriented across road: rotate to align with roadSide
+				stripe.rotation.y = angle + Math.PI/2;
+				const worldPos = center.clone().add(local);
+				stripe.position.set(worldPos.x, 0.03, worldPos.z);
+				stripe.receiveShadow = true;
+				crossGroup.add(stripe);
+			}
+			scene.add(crossGroup);
+			crossings.push({ pos: center, angle: angle, lastSpawn: 0 });
+		}
+	});
+}
+
+function spawnPedestriansAtCrossing(crossing) {
+	const now = Date.now();
+	if (now - crossing.lastSpawn < 3000) return; // cooldown
+	crossing.lastSpawn = now;
+	// spawn 1-3 pedestrians crossing
+	const count = 1 + Math.floor(Math.random() * 3);
+	for (let i = 0; i < count; i++) {
+		// find inactive ped
+		const ped = pedestrianPool.find(p => !p.userData.active);
+		if (!ped) break;
+		// spawn slightly to one side of crossing
+		const side = (Math.random() < 0.5) ? 1 : -1;
+		const roadSide = new THREE.Vector3(Math.cos(crossing.angle), 0, -Math.sin(crossing.angle));
+		const start = crossing.pos.clone().add(roadSide.clone().multiplyScalar((BUILDING_OFFSET - 2) * side));
+		// small random offset along the road
+		start.add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 0, (Math.random() - 0.5) * 1.5));
+		ped.position.set(start.x, 0, start.z);
+		ped.userData.active = true;
+		// velocity: cross perpendicular to road (towards opposite side)
+		const speedVal = 0.02 + Math.random() * 0.06;
+		const vel = roadSide.clone().multiplyScalar(-side * speedVal);
+		ped.userData.vel = vel;
+		// small chance to pause initially
+		if (Math.random() < 0.3) ped.userData.pauseTimer = Math.floor(Math.random() * 60);
+	}
+}
+
+// Update pedestrian movement each frame
+function updatePedestrians() {
+	for (let i = 0; i < pedestrianPool.length; i++) {
+		const p = pedestrianPool[i];
+		if (!p.userData.active) continue;
+
+		// Pause logic
+		if (p.userData.pauseTimer && p.userData.pauseTimer > 0) {
+			p.userData.pauseTimer -= 1;
+			continue;
+		}
+
+		// Move by velocity vector (set when spawned)
+		if (p.userData.vel) {
+			p.position.add(p.userData.vel);
+			// Face movement
+			const lookAt = p.position.clone().add(p.userData.vel);
+			p.lookAt(lookAt.x, p.position.y, lookAt.z);
+		}
+
+		// Randomly pause or change speed occasionally
+		if (Math.random() < 0.003) {
+			p.userData.pauseTimer = Math.floor(Math.random() * 80);
+		}
+
+		// If pedestrian wandered too far from roads, hide them
+		if (p.position.length() > 400 || Math.abs(p.position.x) > 1000 || Math.abs(p.position.z) > 1000) {
+			p.userData.active = false;
+			p.position.y = -50;
+		}
+	}
+}
+
+function checkCollisions(prevPos) {
+	// Check buildings
+	for (let i = 0; i < buildingPool.length; i++) {
+		const b = buildingPool[i];
+		if (!b) continue;
+		// hidden
+		if (b.position.y < -10) continue;
+		const dx = rickshaw.position.x - b.position.x;
+		const dz = rickshaw.position.z - b.position.z;
+		const dist = Math.sqrt(dx*dx + dz*dz);
+		const br = b.userData.radius || 4;
+		if (dist < (RICKSHAW_RADIUS + br)) {
+			// collision - revert
+			rickshaw.position.copy(prevPos);
+			speed = 0;
+			return;
+		}
+	}
+
+	// Monument rough radius (don't drive through centerpiece)
+	if (monument) {
+		const mx = monument.position.x || 0;
+		const mz = monument.position.z || 0;
+		const mr = monument.userData && monument.userData.radius ? monument.userData.radius : 8;
+		const mdist = Math.sqrt((rickshaw.position.x - mx)**2 + (rickshaw.position.z - mz)**2);
+		if (mdist < (mr + RICKSHAW_RADIUS)) {
+			rickshaw.position.copy(prevPos);
+			speed = 0;
+			return;
+		}
+	}
+
+	// Pedestrians - if hit, decrease score and 'knock them away' (hide)
+	for (let i = 0; i < pedestrianPool.length; i++) {
+		const p = pedestrianPool[i];
+		if (!p.userData.active) continue;
+		const dx = rickshaw.position.x - p.position.x;
+		const dz = rickshaw.position.z - p.position.z;
+		const dist = Math.sqrt(dx*dx + dz*dz);
+		if (dist < (RICKSHAW_RADIUS + p.userData.radius)) {
+			// hit!
+			score = Math.max(0, score - 10);
+			document.getElementById('score').innerText = 'Score: ' + score;
+			p.userData.active = false;
+			p.position.y = -50;
+			// small bounce back
+			rickshaw.position.copy(prevPos);
+			speed *= -0.1;
+			return;
+		}
+	}
+}
+
+function placeBuilding(mesh, fwd, right, distance, side, seed) {
+// Calculate position: Center + (Forward * dist) + (Right * offset * side)
+const pos = fwd.clone().multiplyScalar(distance).add(right.clone().multiplyScalar(BUILDING_OFFSET * side));
+
+mesh.position.set(pos.x, 0, pos.z);
+
+// Scale/Color based on seed (pseudo-random)
+const h = 5 + (seed % 10); // Height 5 to 15
+mesh.scale.set(1, h, 1);
+mesh.position.y = h / 2; // Sit on ground
+
+// Rotation: Face the road
+mesh.lookAt(pos.x + right.x * side * -1, h/2, pos.z + right.z * side * -1);
+
+	// Compute approximate collision radius based on footprint and current scale
+	const bw = mesh.userData.baseWidth || 8;
+	const bd = mesh.userData.baseDepth || 8;
+	const rx = (bw * mesh.scale.x) / 2;
+	const rz = (bd * mesh.scale.z) / 2;
+	mesh.userData.radius = Math.sqrt(rx * rx + rz * rz) * 1.05;
+}
+
+function updateMinimap() {
+const px = rickshaw.position.x;
+const pz = rickshaw.position.z;
+
+// Update Player Dot Position (Relative to center of minimap div)
+const mapDiv = document.getElementById('minimap-content');
+const pDot = document.getElementById('player-marker');
+const cDot = document.getElementById('center-marker');
+
+// In this minimap design, Center is static in middle, Player moves?
+// OR Player static, Map moves?
+// Let's make Center static in middle of radar.
+
+// Map Coordinates (Top-down, x=x, z=y)
+// Scale down world coordinates
+const mapX = px * mapScale;
+const mapY = pz * mapScale;
+
+// To show "Center" relative to player, we actually need to move the 'center marker' relative to the player who is center.
+// BUT user asked for "landmark of center".
+// Let's keep the Center Dot in the middle of the radar div (75, 75).
+// And move the Player Dot.
+// If player goes too far, the dot sticks to edge?
+
+// Actually, typical GTA map: Player is center. World moves.
+// Let's do that. Player is center. Center marker moves.
+
+pDot.style.left = '50%';
+pDot.style.top = '50%';
+pDot.style.transform = `translate(-50%, -50%) rotate(${-rickshaw.rotation.y}rad)`; // Rotate arrow
+
+// Center marker position relative to player
+// dx, dy is distance FROM player TO center
+const dx = (0 - px) * mapScale;
+const dy = (0 - pz) * mapScale; // Z is Y on screen
+
+// Rotate these coordinates based on player rotation so "Up" on map is "Forward" in game?
+// Or simple North-Up map? North-Up is easier to read for "Center".
+
+// Simple North-Up Map:
+// Player dot moves away from center div.
+// Center dot is fixed at 75,75 (middle of 150px div).
+// Player dot is at 75+x, 75+y.
+
+cDot.style.left = '50%';
+cDot.style.top = '50%';
+
+// Let's invert: Map frame is fixed on world (0,0).
+// Player moves inside it. If player goes too far, map zooms or clamps?
+// Infinite map: Player is center (fixed). The "Home" dot moves.
+
+// Player is at (0,0) visually.
+// Home is at (-px, -pz).
+// We need to rotate this vector by player rotation if we want "Forward-Up" map.
+// Let's stick to North-Up (simpler).
+
+// Player is center of div.
+// Home marker pos:
+const homeX = 75 + (-px * 0.5); // 0.5 is map zoom
+const homeY = 75 + (-pz * 0.5);
+
+// Clamp logic (if center is off radar, stick it to edge)
+// ... Keeping it simple for now.
+
+// Let's try: Player is moving dot. Center is fixed in middle.
+// If player goes > 150px away, dot disappears or clamps.
+// This is better for "Returning to center".
+
+cDot.style.left = '75px';
+cDot.style.top = '75px';
+
+const pMapX = 75 + (px * 0.5);
+const pMapY = 75 + (pz * 0.5);
+
+pDot.style.left = pMapX + 'px';
+pDot.style.top = pMapY + 'px';
+
+// Rotate player arrow to match heading
+// CSS rotation is clockwise, ThreeJS Y is counter-clockwise
+pDot.style.transform = `translate(-50%, -50%) rotate(${-rickshaw.rotation.y}rad)`;
+}
+
+// --- ASSET FUNCTIONS ---
+
+function createGround() {
+// Infinite-looking plane (just huge)
+const geo = new THREE.PlaneGeometry(10000, 10000);
+const mat = new THREE.MeshStandardMaterial({ color: 0x50c878 }); // Grass
+const mesh = new THREE.Mesh(geo, mat);
+mesh.rotation.x = -Math.PI / 2;
+mesh.receiveShadow = true;
+scene.add(mesh);
+}
+
+function createRoads() {
+const roadMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+
+// Central Roundabout
+const roundGeo = new THREE.CircleGeometry(20, 32);
+const round = new THREE.Mesh(roundGeo, roadMat);
+round.rotation.x = -Math.PI / 2;
+round.position.y = 0.02;
+scene.add(round);
+
+// 3 Infinite Arms
+ROAD_ANGLES.forEach(angle => {
+// We create a very long plane
+const len = 5000;
+const geo = new THREE.PlaneGeometry(ROAD_WIDTH, len);
+const road = new THREE.Mesh(geo, roadMat);
+
+// Position: Start from edge of roundabout and go out
+const dist = 20 + len/2;
+road.position.set(Math.sin(angle)*dist, 0.03, Math.cos(angle)*dist);
+
+road.rotation.x = -Math.PI / 2;
+road.rotation.z = -angle; // Align with direction
+
+scene.add(road);
+});
+}
+
+function createBuildingPool(count) {
+const geoms = [
+new THREE.BoxGeometry(8, 1, 8),
+new THREE.BoxGeometry(6, 1, 10),
+new THREE.BoxGeometry(10, 1, 6)
+];
+
+const colors = [0xaaaaaa, 0xcccccc, 0xeeeeee, 0x998877, 0x889977];
+
+for(let i=0; i<count; i++) {
+const geo = geoms[Math.floor(Math.random() * geoms.length)];
+const mat = new THREE.MeshStandardMaterial({
+color: colors[Math.floor(Math.random() * colors.length)]
+});
+const mesh = new THREE.Mesh(geo, mat);
+
+	// store base footprint info for collision
+	mesh.userData.baseWidth = geo.parameters.width || 8;
+	mesh.userData.baseDepth = geo.parameters.depth || 8;
+
+// Add some "Windows" texture details (simple blocks)
+// (Optional optimization: Keep it simple for performance)
+
+mesh.position.y = -50; // Hide initially
+mesh.castShadow = true;
+mesh.receiveShadow = true;
+
+scene.add(mesh);
+buildingPool.push(mesh);
+}
+}
+
+function createPedestrianPool(count) {
+	const geoHead = new THREE.SphereGeometry(0.18, 8, 8);
+	const geoBody = new THREE.BoxGeometry(0.4, 0.8, 0.25);
+	const mat = new THREE.MeshStandardMaterial({ color: 0xffc080 });
+
+	for (let i = 0; i < count; i++) {
+		const head = new THREE.Mesh(geoHead, mat);
+		const body = new THREE.Mesh(geoBody, mat);
+		const grp = new THREE.Group();
+		head.position.y = 0.9;
+		body.position.y = 0.4;
+		grp.add(body);
+		grp.add(head);
+		grp.position.y = -50; // hide initially
+		grp.userData.radius = 0.6;
+		grp.userData.active = false;
+		scene.add(grp);
+		pedestrianPool.push(grp);
+	}
+}
+
+function createMonument() {
+	// Reconstructed monument (more detailed centerpiece)
+	const monumentGroup = new THREE.Group();
+
+	// Materials local to the monument to avoid name collisions
+	const stoneMaterial = new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 0.9, flatShading: true });
+	const pillarMaterial = new THREE.MeshStandardMaterial({ color: 0xcfb997, roughness: 0.8, flatShading: true });
+	const greenBaseMaterial = new THREE.MeshStandardMaterial({ color: 0x00a86b, roughness: 0.6 });
+	const bronzeMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3c31, metalness: 0.6, roughness: 0.4 });
+	const redFlagMaterial = new THREE.MeshStandardMaterial({ color: 0x8b0000, side: THREE.DoubleSide });
+	const fenceMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.5 });
+
+	// 1. The Green Base (Outer Ring)
+	const baseGeo = new THREE.CylinderGeometry(8, 8, 1.5, 32);
+	const base = new THREE.Mesh(baseGeo, greenBaseMaterial);
+	base.position.y = 0.75;
+	base.receiveShadow = true;
+	monumentGroup.add(base);
+
+	// 2. The Fence
+	const fenceRadius = 7.5;
+	const fenceHeight = 1.5;
+	const numPosts = 30;
+	const fenceGroup = new THREE.Group();
+
+	for (let i = 0; i < numPosts; i++) {
+		const angle = (i / numPosts) * Math.PI * 2;
+		const x = Math.cos(angle) * fenceRadius;
+		const z = Math.sin(angle) * fenceRadius;
+
+		const postGeo = new THREE.CylinderGeometry(0.05, 0.05, fenceHeight, 8);
+		const post = new THREE.Mesh(postGeo, fenceMaterial);
+		post.position.set(x, 1.5 + fenceHeight / 2, z);
+		fenceGroup.add(post);
+	}
+	const railGeo = new THREE.TorusGeometry(fenceRadius, 0.05, 8, 64);
+	const rail = new THREE.Mesh(railGeo, fenceMaterial);
+	rail.rotation.x = Math.PI / 2;
+	rail.position.y = 1.5 + fenceHeight;
+	fenceGroup.add(rail);
+	monumentGroup.add(fenceGroup);
+
+	// 3. Inner Steps/Plinth
+	const stepsGeo = new THREE.CylinderGeometry(4, 4.5, 2, 8);
+	const steps = new THREE.Mesh(stepsGeo, stoneMaterial);
+	steps.position.y = 1.5 + 1;
+	steps.castShadow = true;
+	steps.receiveShadow = true;
+	monumentGroup.add(steps);
+
+	const plinthGeo = new THREE.BoxGeometry(3, 1.5, 3);
+	const plinth = new THREE.Mesh(plinthGeo, stoneMaterial);
+	plinth.position.y = 3.5 + 0.75;
+	plinth.castShadow = true;
+	monumentGroup.add(plinth);
+
+	const plaqueGeo = new THREE.PlaneGeometry(2, 0.8);
+	const plaqueMat = new THREE.MeshStandardMaterial({ color: 0x800000 });
+	const plaque1 = new THREE.Mesh(plaqueGeo, plaqueMat);
+	plaque1.position.set(0, 3.5 + 0.75, 1.51);
+	monumentGroup.add(plaque1);
+
+	// 4. The Main Pillar
+	const pillarHeight = 6;
+	const pillarBaseGeo = new THREE.CylinderGeometry(0.9, 1.1, 1, 8);
+	const pillarBase = new THREE.Mesh(pillarBaseGeo, pillarMaterial);
+	pillarBase.position.y = 5 + 0.5;
+	monumentGroup.add(pillarBase);
+
+	const shaftGeo = new THREE.CylinderGeometry(0.7, 0.9, pillarHeight, 8);
+	const shaft = new THREE.Mesh(shaftGeo, pillarMaterial);
+	shaft.position.y = 6 + pillarHeight / 2;
+	shaft.castShadow = true;
+	monumentGroup.add(shaft);
+
+	const ringGeo = new THREE.TorusGeometry(0.8, 0.1, 8, 8);
+	const ring1 = new THREE.Mesh(ringGeo, pillarMaterial);
+	ring1.rotation.x = Math.PI / 2;
+	ring1.position.y = 7.5;
+	monumentGroup.add(ring1);
+
+	// 5. The Capital (Top Bowl)
+	const capitalGroup = new THREE.Group();
+	capitalGroup.position.y = 6 + pillarHeight;
+
+	const neckGeo = new THREE.CylinderGeometry(0.9, 0.7, 0.8, 8);
+	const neck = new THREE.Mesh(neckGeo, pillarMaterial);
+	neck.position.y = 0.4;
+	capitalGroup.add(neck);
+
+	const bowlGeo = new THREE.CylinderGeometry(2, 0.9, 1, 8);
+	const bowl = new THREE.Mesh(bowlGeo, pillarMaterial);
+	bowl.position.y = 1.3;
+	capitalGroup.add(bowl);
+
+	const topPlatformGeo = new THREE.CylinderGeometry(2, 2, 0.2, 16);
+	const topPlatform = new THREE.Mesh(topPlatformGeo, pillarMaterial);
+	topPlatform.position.y = 1.9;
+	capitalGroup.add(topPlatform);
+
+	monumentGroup.add(capitalGroup);
+
+	// 6. The Statues (Abstracted)
+	const statueGroup = new THREE.Group();
+	statueGroup.position.y = 6 + pillarHeight + 2.0;
+
+	function createFigure(x, z, rotation) {
+		const fig = new THREE.Group();
+		fig.position.set(x, 0, z);
+		fig.rotation.y = rotation;
+		const legGeo = new THREE.CylinderGeometry(0.1, 0.12, 1.2, 8);
+		const legL = new THREE.Mesh(legGeo, bronzeMaterial);
+		legL.position.set(-0.2, 0.6, 0);
+		fig.add(legL);
+		const legR = new THREE.Mesh(legGeo, bronzeMaterial);
+		legR.position.set(0.2, 0.6, 0);
+		fig.add(legR);
+		const torsoGeo = new THREE.BoxGeometry(0.5, 1.1, 0.3);
+		const torso = new THREE.Mesh(torsoGeo, bronzeMaterial);
+		torso.position.y = 1.2 + 0.55;
+		fig.add(torso);
+		const headGeo = new THREE.SphereGeometry(0.25, 16, 16);
+		const head = new THREE.Mesh(headGeo, bronzeMaterial);
+		head.position.y = 1.2 + 1.1 + 0.3;
+		fig.add(head);
+		const armGeo = new THREE.CylinderGeometry(0.08, 0.08, 1, 8);
+		const armL = new THREE.Mesh(armGeo, bronzeMaterial);
+		armL.position.set(-0.35, 2, 0);
+		armL.rotation.z = 0.5;
+		fig.add(armL);
+		const armR = new THREE.Mesh(armGeo, bronzeMaterial);
+		armR.position.set(0.35, 2, 0);
+		armR.rotation.z = -0.5;
+		fig.add(armR);
+		return fig;
+	}
+
+	const fig1 = createFigure(-0.4, 0, 0.2);
+	const armR1 = fig1.children[4];
+	if (armR1) {
+		armR1.rotation.z = -2.5;
+		armR1.position.y = 2.2;
+	}
+	statueGroup.add(fig1);
+
+	const fig2 = createFigure(0.4, 0, -0.2);
+	const armL2 = fig2.children[3];
+	if (armL2) {
+		armL2.rotation.z = 2.5;
+		armL2.position.y = 2.2;
+	}
+	statueGroup.add(fig2);
+
+	const poleGeo = new THREE.CylinderGeometry(0.03, 0.03, 3, 8);
+	const pole = new THREE.Mesh(poleGeo, new THREE.MeshStandardMaterial({ color: 0x333333 }));
+	pole.position.set(0, 2, 0.2);
+	pole.rotation.z = -0.4;
+	pole.rotation.x = 0.2;
+	statueGroup.add(pole);
+
+	const flagGeo = new THREE.PlaneGeometry(1.2, 0.8);
+	const flag = new THREE.Mesh(flagGeo, redFlagMaterial);
+	flag.position.set(0.6, 3.0, 0.2);
+	flag.rotation.z = -0.4;
+	flag.rotation.x = 0.2;
+	flag.castShadow = true;
+	flag.material.side = THREE.DoubleSide;
+	statueGroup.add(flag);
+
+	monumentGroup.add(statueGroup);
+
+	// Assign an approximate collision radius to the monument center
+	monumentGroup.userData = monumentGroup.userData || {};
+	monumentGroup.userData.radius = 9;
+
+	return monumentGroup;
+}
+
+function createRickshaw() {
+const g = new THREE.Group();
+
+// Body
+const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.5, 2.4), new THREE.MeshStandardMaterial({color: 0x2E8B57}));
+body.position.y = 1.1;
+body.castShadow = true;
+g.add(body);
+
+// Roof
+const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.2, 2.6), new THREE.MeshStandardMaterial({color: 0x111111}));
+roof.position.y = 2.0;
+g.add(roof);
+
+// Wheels
+const wMat = new THREE.MeshStandardMaterial({color: 0x111111});
+const wGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.2, 16);
+
+const w1 = new THREE.Mesh(wGeo, wMat); w1.rotation.z = Math.PI/2; w1.position.set(0.8, 0.4, -0.8); g.add(w1);
+const w2 = new THREE.Mesh(wGeo, wMat); w2.rotation.z = Math.PI/2; w2.position.set(-0.8, 0.4, -0.8); g.add(w2);
+const w3 = new THREE.Mesh(wGeo, wMat); w3.rotation.z = Math.PI/2; w3.position.set(0, 0.4, 1.0); g.add(w3); // Front
+
+// Headlight
+const hl = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.2), new THREE.MeshStandardMaterial({color: 0xffffaa, emissive: 0x555500}));
+hl.rotation.x = Math.PI/2;
+hl.position.set(0, 1.0, 1.2);
+g.add(hl);
+
+return g;
+}
+
+function animate() {
+requestAnimationFrame(animate);
+
+updatePhysics();
+updateCamera();
+updateEnvironment(); // Logic for infinite buildings
+updateMinimap();
+updatePedestrians();
+
+renderer.render(scene, camera);
+}
+
+init();
+
+</script>
+</body>
+</html>
