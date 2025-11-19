@@ -18,6 +18,23 @@ font-weight: bold;
 text-shadow: 1px 1px 2px black;
 pointer-events: none;
 }
+
+/* Reference image panel */
+#ref-panel {
+	position: absolute;
+	top: 80px;
+	right: 20px;
+	width: 320px;
+	background: rgba(0,0,0,0.6);
+	color: #fff;
+	padding: 10px;
+	border-radius: 8px;
+	font-family: sans-serif;
+	pointer-events: auto;
+}
+#ref-panel img { width: 100%; height: auto; display: block; border-radius: 4px; border: 2px solid #fff; }
+#ref-panel .caption { margin-top: 8px; font-size: 13px; text-align: center; }
+#ref-panel a { color: #ffd; text-decoration: underline; font-size: 12px; }
 </style>
 <!-- Import Three.js from CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -26,6 +43,12 @@ pointer-events: none;
 </head>
 <body>
 <div id="info">Birtamode Monument - Drag to Rotate, Scroll to Zoom</div>
+<div id="ref-panel">
+	<a href="https://upload.wikimedia.org/wikipedia/commons/c/c8/Birtamode_city_of_jhapa_district4.JPG" target="_blank" rel="noopener noreferrer">
+		<img src="https://upload.wikimedia.org/wikipedia/commons/c/c8/Birtamode_city_of_jhapa_district4.JPG" alt="Birtamode Monument reference" />
+	</a>
+	<div class="caption">Reference: Birtamode Monument (Muktichowk). Click image to open full size.</div>
+</div>
 <script>
 // --- SCENE SETUP ---
 const scene = new THREE.Scene();
